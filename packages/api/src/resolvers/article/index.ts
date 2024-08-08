@@ -4,7 +4,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-floating-promises */
 import { Readability } from '@omnivore/readability'
-import graphqlFields from 'graphql-fields'
 import {
   ContentReaderType,
   LibraryItem,
@@ -106,7 +105,6 @@ import {
   titleForFilePath,
 } from '../../utils/helpers'
 import {
-  getDistillerResult,
   htmlToMarkdown,
   ParsedContentPuppeteer,
   parsePreparedContent,
@@ -116,7 +114,6 @@ import { getStorageFileDetails } from '../../utils/uploads'
 export enum ArticleFormat {
   Markdown = 'markdown',
   Html = 'html',
-  Distiller = 'distiller',
   HighlightedMarkdown = 'highlightedMarkdown',
 }
 
@@ -376,15 +373,9 @@ export const getArticleResolver = authorized<
   Merge<ArticleSuccess, { article: LibraryItem }>,
   ArticleError,
   QueryArticleArgs
->(async (_obj, { slug, format }, { uid, log }, info) => {
+>(async (_obj, { slug, format }, { uid, log }) => {
   try {
     const selectColumns = getColumns(libraryItemRepository)
-    const includeOriginalHtml =
-      format === ArticleFormat.Distiller ||
-      !!graphqlFields(info).article.originalHtml
-    if (!includeOriginalHtml) {
-      selectColumns.splice(selectColumns.indexOf('originalContent'), 1)
-    }
 
     const libraryItem = await authTrx(
       (tx) => {
@@ -435,18 +426,6 @@ export const getArticleResolver = authorized<
 
     if (format === ArticleFormat.Markdown) {
       libraryItem.readableContent = htmlToMarkdown(libraryItem.readableContent)
-    } else if (format === ArticleFormat.Distiller) {
-      if (!libraryItem.originalContent) {
-        return { errorCodes: [ArticleErrorCode.BadData] }
-      }
-      const distillerResult = await getDistillerResult(
-        uid,
-        libraryItem.originalContent
-      )
-      if (!distillerResult) {
-        return { errorCodes: [ArticleErrorCode.BadData] }
-      }
-      libraryItem.readableContent = distillerResult
     }
 
     return {
@@ -760,9 +739,10 @@ export const bulkActionResolver = authorized<
         },
       })
 
-      const batchSize = 100
+      const batchSize = 20
       const searchArgs = {
         query,
+        includePending: true,
         size: 0,
       }
       const count = await countLibraryItems(searchArgs, uid)
@@ -778,13 +758,13 @@ export const bulkActionResolver = authorized<
           action,
           count,
         })
-        // if there are less than 100 items, update them synchronously
+        // if there are less than batchSize items, update them synchronously
         await batchUpdateLibraryItems(action, searchArgs, uid, labelIds, args)
 
         return { success: true }
       }
 
-      // if there are more than 100 items, update them asynchronously
+      // if there are more than batchSize items, update them asynchronously
       const data = {
         userId: uid,
         action,
